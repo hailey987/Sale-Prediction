@@ -11,17 +11,17 @@
 | Column Name (旧ERP) | Description            | Column Name（新ERP）|             
 |-------------|------------------------|---------------------|
 | STATE        |   州           |State
-| CUSTNMBR     | 客户编号               |Customer
+| CUSTNMBR     | 客户ID               |Customer
 | SLPRSNID       | 订单途径           |SRID
 | SOPNUMBE        | 订单编号               |OrderNbr
-| ITEMNMBR     | 产品编号               |InventoryID
+| ITEMNMBR     | 产品ID               |InventoryID
 | GENUS       | 类别          |CropName
 | ITEMDESC        | 细分类别               |Description
 | UOFM     | 产品规格              |Productsize
 | XTNDPRCE       | 单价          |Amount
 | QUANTITY        | 订单数量               |Quantity
 | DOCDATE     | 订单日期               |Date
-|PRCLEVEL       |客户分类                   |PriceClass
+|PRCLEVEL       |客户类别                   |PriceClass
 
 # 1.基础数据处理
 旧ERP数据拼接
@@ -117,15 +117,13 @@ old_erp = pd.read_csv('2018_2024_old.csv')
 # 加载 2024 Sales Data ACU.xlsx
 new_erp = pd.read_csv('2024_new.csv')
 
-# 将 'Description' 和 'CropName' 列的内容转换为小写
+# 数据标准化
 new_erp['Description'] = new_erp['Description'].str.lower()
 new_erp['CropName'] = new_erp['CropName'].str.lower()
 
-# 确保两个数据集的 Date 列为 datetime 类型
+# 确保两个数据集的 Date 列为 datetime 类型，转换为 MM/DD/YYYY 格式
 old_erp['Date'] = pd.to_datetime(old_erp['Date'], errors='coerce')
 new_erp['Date'] = pd.to_datetime(new_erp['Date'], errors='coerce')
-
-# 将 Date 列统一转换为 MM/DD/YYYY 格式
 old_erp['Date'] = old_erp['Date'].dt.strftime('%m/%d/%Y')
 new_erp['Date'] = new_erp['Date'].dt.strftime('%m/%d/%Y')
 
@@ -138,18 +136,33 @@ combined_erp.to_csv('combined_sales_data.csv', index=False)
 
 ```
 数据筛选
-重点关注标有重量单位（OZ、LB、种子和公斤）的产品尺寸
 ```python
 # 读取 csv 文件
 df = pd.read_csv('combined_sales_data.csv')
 
 # 筛选出 'Productsize' 列中包含 'seed', 'oz', 'lb', 'kg' 的行
 keywords = ['seed', 'oz', 'lb', 'kg']
-df_filtered = df[df['Productsize'].str.contains('|'.join(keywords), case=False, na=False)]
-print(df_filtered)
+merged_data = df[df['Productsize'].str.contains('|'.join(keywords), case=False, na=False)]
+print(merged_data)
 
-#输出
-df_filtered.to_csv('merged_data.csv', index=False)
+#筛选出连续销售7年的种子种类
+merged_data['year'] = merged_data['Date'].apply(lambda x: x.year + 1 if x.month >= 7 else x.year)
+inventory_grouped = merged_data.groupby(['InventoryID', 'year'])['Quantity'].sum().reset_index()
+inventory_year_count = inventory_grouped.groupby('InventoryID')['year'].nunique().reset_index()
+valid_inventory = inventory_year_count[inventory_year_count['year'] == 7]['InventoryID']
+filtered_inventory = merged_data[merged_data['InventoryID'].isin(valid_inventory)]
 ```
-年份筛选
+数据清洗
+```python
+
+
+
+
+
+
+
+
+
+
+
 
