@@ -208,7 +208,128 @@ print(invalid_prices)
 df['Date'] = pd.to_datetime(df['Date'])
 
 ```
-#时间序列模型
-#ARIMA
+# 2.数据透视表转换
+```python
+#weekly
+df['week']=df['Date'].dt.to_period('W').apply(lambda r:r.start_time)
+df['week'] = pd.to_datetime(df['week']) 
+df.set_index('week', inplace=True)
+pivot_table_week = df.pivot_table(values='Quantity', index='week', columns='InventoryID', aggfunc='sum', fill_value=0)
 
+#monthly
+df['month']=df['Date'].dt.to_period('M').apply(lambda r:r.start_time)
+df['month'] = pd.to_datetime(df['month']) 
+df.set_index('month', inplace=True)
+pivot_table_month = df.pivot_table(values='Quantity', index='month', columns='InventoryID', aggfunc='sum', fill_value=0)
+
+```
+
+
+# 3.时间序列模型(实际同时使用了weekly和monthly的数据，由于篇幅限制，只呈现weekly)
+#ARIMA
+```python
+
+!pip install statsmodels matplotlib
+
+from statsmodels.tsa.arima.model import ARIMA
+from sklearn.metrics import mean_absolute_error
+from statsmodels.tsa.stattools import adfuller
+
+pivot_table_week["week"] = pd.to_datetime(pivot_table_week["week"], format="%Y-%m-%d")
+pivot_table_week.set_index("week", inplace=True)
+
+#检查平稳性
+def adf_test(series):
+    result = adfuller(series.dropna()) 
+    return result[1] 
+
+p_values = pivot_table_week.apply(adf_test, axis=0) 
+print("各列的 ADF p-value:\n", p_values)
+
+if (p_values < 0.05).sum() > len(p_values) / 2:
+    print("大多数列是平稳的，整体上可能是平稳的")
+else:
+    print("大多数列是非平稳的，整体上可能是非平稳的")
+
+import matplotlib.pyplot as plt
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+
+#绘制ACF/PACF图
+
+plt.figure(figsize=(10, 5))
+plot_acf(series, lags=50) 
+plt.title('ACF')
+plt.show()
+
+plt.figure(figsize=(10, 5))
+plot_pacf(series, lags=50) 
+plt.title('PACF')
+plt.show()
+
+提取Inventory ID
+inventory_ids = [col for col in pivot_table_week.columns if col not in ["week", "Quantity"]]
+print(inventory_ids)
+
+# 定义ARIMA模型
+def train_arima_model(series, order=(1, 0, 1), test_size=0.2): 
+    n_test = int(len(series) * test_size)
+    train, test = series[:-n_test], series[-n_test:]
+
+    model = ARIMA(train, order=order)
+    result = model.fit()
+
+    forecast = result.forecast(steps=len(test))
+    predictions = pd.Series(forecast, index=test.index)
+
+    mae = mean_absolute_error(test, predictions)
+    return mae
+
+#计算Global_MAE
+global_absolute_errors = []
+for inventory_id in inventory_ids:
+    series = pivot_table_week[inventory_id].dropna()
+
+    if len(series) < 104:  
+        continue
+
+    mae = train_arima_model(series)
+
+    global_absolute_errors.append(mae)
+
+global_mae = sum(global_absolute_errors) / len(global_absolute_errors)
+print(f"Global MAE: {global_mae:.4f}")
+```
+#SARIMA
+```Python
+
+import pandas as pd
+import matplotlib.pyplot as plt
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from sklearn.metrics import mean_absolute_error
+
+def train_sarima_model(series, order=(1, 1, 1), seasonal_order=(1, 1, 1, 12), test_size=0.2):
+
+    n_test = max(1, int(len(series) * test_size))
+    train, test = series[:-n_test], series[-n_test:]
+
+    model = SARIMAX(train, order=order, seasonal_order=seasonal_order)
+    result = model.fit()
+
+    forecast = result.forecast(steps=len(test))
+    predictions = pd.Series(forecast, index=test.index)
+
+    mae = mean_absolute_error(test, predictions)
+    return mae
+
+
+def calculate_global_mae(df, inventory_ids):
+    global_absolute_errors = Parallel(n_jobs=-1)(delayed(train_sarima_model)(df[inventory_id].dropna())
+                                                 for inventory_id in inventory_ids if len(df[inventory_id].dropna()) >= 104)
+    global_mae = sum(global_absolute_errors) / len(global_absolute_errors)
+    return global_mae
+
+global_mae = calculate_global_mae(pivot_table_week, inventory_ids)
+print(f"SARIMA Global MAE: {global_mae:.4f}")
+
+```
 
