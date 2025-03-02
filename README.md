@@ -71,6 +71,7 @@ combined_df.columns = columns_order
 
 数据映射
 ```python
+
 !pip install openpyxl
 
 mapping_inv = pd.read_excel('Mapping Document.xlsx', sheet_name='GP_to_ACU_InvMapping')
