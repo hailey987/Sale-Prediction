@@ -24,6 +24,10 @@
 |PRCLEVEL       |客户类别                   |PriceClass
 
 # 1.基础数据处理
+```python
+过滤数据的必要性：（1）某些 InventoryID 的历史数据有限 （2）时间间隔缺失或不规则
+```
+
 旧ERP数据拼接
 ```python
 import pandas as pd
@@ -907,7 +911,7 @@ inventory_ids = test_data['InventoryID'].unique()
 global_mae = global_mae_prophet(train_data, test_data, inventory_ids)
 print("Global MAE:", global_mae)
 ```
-# 不同种子之间销量的关系
+# 4.不同种子之间销量的关系
 #大类
 
 ```python
@@ -942,8 +946,6 @@ correlation_results1.to_excel('p-value1.xlsx', index=False)
 ```
 #无法确定高相关度是种子类别之间的影响还是与季节有关
 
-# 客户是否会同时购买不同种类的种子
-
 ```python
 !pip install mlxtend
 import mlxtend
@@ -962,14 +964,224 @@ rules = association_rules(frequent_itemsets, metric="lift", min_threshold=1, num
 print(rules[['antecedents', 'consequents', 'support', 'confidence', 'lift']])
 rules.to_excel('customer-relation.xlsx', index=False)
 
-#顾客确实会同时购买不同种类的种子，例如她们会同时购买pumpkin和squash，并应用VAR模型捕捉顾客的喜好
 ```
 
-# VAR model
+#VAR model  捕获多个变量之间的相互依赖关系
+```python
+from statsmodels.tsa.api import VAR
+from sklearn.metrics import mean_absolute_error
+import numpy as np
 
+data = pd.read_csv('final_cleaned')
+data['Dates'] = pd.to_datetime(data['Dates'], format='%m/%d/%Y')
+monthly_sales = data.groupby([pd.Grouper(key='Dates', freq='M'),'CropName','InventoryID'])['Quantity'].sum().reset_index()
+print(monthly_sales.head())
 
+print("Unique CropNames:", monthly_sales['CropName'].unique())
+data_filtered = monthly_sales[(monthly_sales['CropName'].str.strip().str.lower() == 'pumpkin') |
+                              (monthly_sales['CropName'].str.strip().str.lower() == 'squash')]
+print("Earliest date after filtering:", data_filtered['Dates'].min())
+print("Latest date after filtering:", data_filtered['Dates'].max())
 
+print(data_filtered.head())
 
+pivoted_data = data_filtered.pivot_table(index='Dates', columns=['CropName', 'InventoryID'], values='Quantity').fillna(0)
+print(pivoted_data.head())
+
+#ADF test
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.tsa.api import VAR
+from sklearn.metrics import mean_absolute_error
+
+def adf_test(series, title=''):
+    """
+    Perform Augmented Dickey-Fuller test to check stationarity
+    """
+    series = series.dropna()  # remove NaN
+    print(f'Augmented Dickey-Fuller Test: {title}')
+    result = adfuller(series, autolag='AIC')
+    labels = ['ADF Test Statistic', 'p-value', '# Lags Used', '# Observations Used']
+    for value, label in zip(result, labels):
+        print(f'{label} : {value}')
+    if result[1] <= 0.05:
+        print("Result: The series is stationary") # return whether the data is stationary or not
+        return True
+    else:
+        print("Result: The series is not stationary")
+        return False
+
+differenced_data = pivoted_data.copy()
+initial_values = {}
+
+for column in pivoted_data.columns:
+    if not adf_test(pivoted_data[column], title=column):
+
+        initial_values[column] = pivoted_data[column].iloc[0]
+
+        pivoted_data[column] = pivoted_data[column].diff().dropna()
+    else:
+
+        initial_values[column] = pivoted_data[column].iloc[0]
+
+def split_data(data, train_size=0.8, random_seed=42):
+    np.random.seed(random_seed)  
+
+    data = data.dropna()  
+
+    data = data.sort_values(by='Dates')
+
+    total_len = len(data)
+    train_end = int(total_len * train_size)
+
+    train_data = data.iloc[:train_end]
+    test_data = data.iloc[train_end:]
+
+    return train_data, test_data
+
+train_data, test_data = split_data(pivoted_data)
+
+#model
+model = VAR(train_data)
+model_fitted = model.fit()
+
+lag_order = model_fitted.k_ar
+forecast_input = train_data.values[-lag_order:]
+forecasted_diff = model_fitted.forecast(y=forecast_input, steps=len(test_data))
+forecasted_diff_df = pd.DataFrame(forecasted_diff, index=test_data.index, columns=differenced_data.columns)
+
+forecasted_df = forecasted_diff_df.copy()
+for column in forecasted_df.columns:
+
+    if column in initial_values:
+        forecasted_df[column] = forecasted_df[column].cumsum() + initial_values[column]
+    else:
+        print(f"Warning: Initial value for {column} not found in initial_values. Using first forecasted value.")
+        first_forecast_value = forecasted_df[column].iloc[0]
+        forecasted_df[column] = forecasted_df[column].cumsum() + forecasted_df[column].iloc[0]
+
+#计算MAE
+train_size_index = len(train_data)
+
+test_data = test_data.dropna() 
+forecasted_df = forecasted_df.loc[test_data.index]
+
+mae_results = {}
+for col in test_data.columns:
+    actual_len = len(test_data[col])
+    forecasted_len = len(forecasted_df[col])
+
+    min_len = min(actual_len, forecasted_len)
+    aligned_actual = test_data[col].iloc[:min_len].dropna()
+    aligned_forecasted = forecasted_df[col].iloc[:min_len].dropna()
+
+    if len(aligned_actual) == len(aligned_forecasted):
+        mae_results[col] = mean_absolute_error(aligned_actual, aligned_forecasted)
+    else:
+        print(f"Warning: Column {col} has inconsistent lengths after dropping NaNs.")
+print("MAE Results:")
+for item, mae in mae_results.items():
+    print(f"{item}: {mae}")
+
+#计算WMAE
+negative_quantities = data[data['Quantity'] < 0]
+print("Negative quantities in the original dataset:")
+print(negative_quantities)
+
+total_quantity = monthly_sales.groupby('InventoryID')['Quantity'].sum()
+weights = total_quantity / total_quantity.sum()
+
+def weighted_mae(y_true, y_pred, weights, min_weight=0.001):
+
+    weights = weights.clip(lower=min_weight)
+    mask = ~np.isnan(y_true) & ~np.isnan(y_pred) & ~np.isnan(weights)
+    y_true, y_pred, weights = y_true[mask], y_pred[mask], weights[mask]
+
+    if weights.sum() == 0:
+        return np.nan
+
+    return (weights * abs(y_true - y_pred)).sum() / weights.sum()
+
+forecasted_df = forecasted_df.loc[test_data.index]
+test_data = test_data.dropna()  
+forecasted_df = forecasted_df.fillna(method='ffill').fillna(method='bfill')
+
+wmae_results = {}
+for col in test_data.columns:
+    aligned_actual = test_data[col].dropna()
+    aligned_forecasted = forecasted_df[col].iloc[:len(aligned_actual)].dropna()
+
+    if len(aligned_actual) == len(aligned_forecasted):
+        weights = aligned_actual
+        wmae_results[col] = weighted_mae(aligned_actual, aligned_forecasted, weights)
+    else:
+        print(f"Warning: Column {col} has inconsistent lengths after alignment.")
+
+print("WMAE Results:")
+for item, wmae in wmae_results.items():
+    print(f"{item}: {wmae}")
+
+def global_weighted_mae(y_true_df, y_pred_df, weights, min_weight=0.001):
+    inventory_ids = y_true_df.columns
+    total_error = 0
+    total_weight = 0
+
+    for col in inventory_ids:
+        y_true = y_true_df[col]
+        y_pred = y_pred_df[col]
+
+        weight = weights[col] if col in weights else 0
+        if weight < min_weight:
+            weight = min_weight
+
+        mask = ~np.isnan(y_true) & ~np.isnan(y_pred)
+        y_true, y_pred = y_true[mask], y_pred[mask]  # remove NAN
+        mae = mean_absolute_error(y_true, y_pred)
+
+        total_error += mae * weight
+        total_weight += weight
+
+    global_wmae = total_error / total_weight if total_weight != 0 else np.nan
+    return global_wmae
+
+global_wmae = global_weighted_mae(test_data, forecasted_df, weights=weights)
+print("Global WMAE:", global_wmae)
+
+accuracy_percentage = (global_wmae / (143.9623/84))  * 100
+print("Model Accuracy Percentage:", accuracy_percentage, "%")
+
+```
+# 5.结果评估
+```python
+#使用GMAE的原因：
+#GMAE 会根据不同的商品规模进行调整，确保对不同销售量的商品进行公平比较。它强调高销量商品，从而更全面地了解模型性能。
+```
+
+# 6.用户友好界面
+```python
+#为了简化时间序列模型结果的使用，我们专门为包装部门开发了一个用户友好的界面。
+#此界面允许团队成员生成预测，而无需高级数据分析知识。
+#用户只需输入关键详细信息，例如作物名称、描述、产品尺寸、开始月份和结束月份，系统就会直接提供相应的预测。
+#该工具使包装部门能够高效、独立地做出数据驱动的决策。
+```
+
+# 7.建议
+```python
+#模型建议：
+#在查看了所有模型的 Global Mae 后，我们建议xxx公司使用 XGboost 作为其预测模型。
+#当他们拥有更多销售数据时，将其更新到模型中以实现更精确的预测。
+
+#包装建议：
+#根据预测结果，给予了包装建议，淘汰了113个销量过低的SKU，以期减少成本。
+#审查低需求商品：对于销量一直较低的商品，评估它们是否仍能满足客户需求。此审查应在减少库存和探索新产品机会之间取得平衡。
+#适应高销量商品：即使某些商品在疫情后销量下降，但它们仍然是高销量产品。使用灵活的采购策略，能够根据市场条件的变化进行调整。
+```
+
+## 季节性趋势
+![image](https://github.com/user-attachments/assets/41fb02cd-5f60-4356-8a1c-e8a3e41a79f9)
+## GMAE
+![image](https://github.com/user-attachments/assets/0afc89ec-f8ce-447d-9d55-9a8a59939908)
+## 用户友好界面
+![image](https://github.com/user-attachments/assets/427a7a71-49c2-490c-8878-907db0be7d2b)
 
 
 
