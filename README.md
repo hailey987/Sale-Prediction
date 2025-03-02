@@ -994,9 +994,7 @@ from statsmodels.tsa.api import VAR
 from sklearn.metrics import mean_absolute_error
 
 def adf_test(series, title=''):
-    """
-    Perform Augmented Dickey-Fuller test to check stationarity
-    """
+   
     series = series.dropna()  # remove NaN
     print(f'Augmented Dickey-Fuller Test: {title}')
     result = adfuller(series, autolag='AIC')
