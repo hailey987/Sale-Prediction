@@ -646,6 +646,8 @@ rae = numerator / denominator
 print(f"Relative Absolute Error (RAE): {rae}")
 ```
 #XGboost
+
+
 ```python
 !pip install pandas-datareader holidays
 import pandas_datareader.data as web
@@ -681,7 +683,9 @@ def create_features(df):
     df['is_covid'] = df.index.to_series().apply(lambda x: 1 if covid_start <= x <= covid_end else 0)
     return df
 
-ps_data = pd.read_csv("quantity_on_id_week.csv")
+train_index = np.array(list(range(0, int(len(df)*0.8))))
+test_index = np.array(list(range(int(len(df)*0.8), len(df))))
+# Test 和 Train 以分别进行了数据基本处理和清洗，此处不再赘述
 
 #选择3个ID进行训练
 inventory_ids = ['00009STDCRU-10KSD', "00105RAWUTR-1KSD", "02091RAWUTR-500SD"]
@@ -696,9 +700,6 @@ for inventory_id in tqdm(inventory_ids):
 
     X = df.drop('quantity', axis=1).values.tolist()
     Y = df["quantity"].values.tolist()
-
-    train_index = np.array(list(range(0, int(len(df)*0.8))))
-    test_index = np.array(list(range(int(len(df)*0.8), len(df))))
 
     trainX = [X[i] for i in train_index if i >= look_back]
     trainY = [Y[i] for i in train_index if i >= look_back]
